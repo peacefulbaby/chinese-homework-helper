@@ -2,3 +2,4 @@ streamlit
 pillow
 pytesseract
 PyMuPDF
+streamlit-cropper
