@@ -3,14 +3,15 @@ from PIL import Image, ImageOps, ImageEnhance
 import pytesseract
 import re
 import fitz  # PyMuPDF 處理 PDF
-from streamlit_cropper import st_cropper
+from streamlit_drawable_canvas import st_canvas
+import numpy as np
 
 st.set_page_config(page_title="中文寫字小幫手", page_icon="✍️", layout="centered")
 
 st.title("🇭🇰 寫字功課好幫手")
-st.markdown("> **Helper Instructions:** Upload an image or PDF, crop the target character to avoid noise, and get the stroke order.")
+st.markdown("> **Helper Instructions:** Upload an image or PDF, then **draw a red box** around the target character on the canvas below.")
 
-# 1. 快捷選擇常見生字（雙重保險）
+# 1. 常用生字快捷選單（雙重保險）
 common_chars = ["學", "校", "我", "們", "老", "師", "早", "安", "爸", "媽", "家", "人", "功", "課", "中", "文"]
 selected_quick = st.selectbox("📌 快捷選擇生字 (Quick Select):", ["請選擇..."] + common_chars)
 
@@ -36,31 +37,84 @@ if uploaded_file is not None:
         st.error(f"檔案讀取發生錯誤：{e}")
 
 detected_chars = []
+cropped_img = None
 
 if image is not None:
     image = image.convert("RGB")
-    st.markdown("### ✂️ 裁剪需要識別的文字區域 (Crop Target Character)")
-    st.markdown("請在下方圖片調整框選範圍，**只框出要學的那一個字**：")
+    orig_w, orig_h = image.size
     
-    try:
-        # 互動式裁剪工具
-        cropped_img = st_cropper(image, real_time=True, box_color='#FF4B4B', aspect_ratio=None, key="cropper")
+    st.markdown("### ✍️ 請在下方圖片用手指畫框框住要學的字")
+    st.markdown("*(Draw a rectangle box around the character)*")
+    
+    # 為了適應手機/iPad 畫面，將顯示寬度設定為 400 像素
+    display_w = 400
+    if orig_w > display_w:
+        ratio = display_w / orig_w
+        display_h = int(orig_h * ratio)
+        img_for_canvas = image.resize((display_w, display_h))
+    else:
+        display_w = orig_w
+        display_h = orig_h
+        img_for_canvas = image
         
-        if cropped_img is not None:
-            st.image(cropped_img, caption="已裁剪的目標區域", use_container_width=True)
+    # 建立互動畫布
+    canvas_result = st_canvas(
+        fill_color="rgba(255, 165, 0, 0.2)",
+        stroke_width=2,
+        stroke_color="#FF0000",
+        background_image=img_for_canvas,
+        update_streamlit=True,
+        height=display_h,
+        width=display_w,
+        drawing_mode="rect",
+        key="canvas",
+    )
+    
+    # 如果外傭在畫布上畫了方框
+    if canvas_result.json_data is not None:
+        objects = canvas_result.json_data.get("objects", [])
+        if len(objects) > 0:
+            # 取得最後一個畫的方框座標
+            obj = objects[-1]
+            box_left = obj["left"]
+            box_top = obj["top"]
+            box_width = obj["width"]
+            box_height = obj["height"]
             
-            with st.spinner("🔍 正在辨識裁剪區內的文字..."):
-                # 影像預處理：轉灰階 + 提高對比度
-                gray_image = ImageOps.grayscale(cropped_img)
-                enhancer = ImageEnhance.Contrast(gray_image)
-                enhanced_image = enhancer.enhance(2.5)
-                
-                # 執行 Tesseract 繁體中文辨識
-                raw_text = pytesseract.image_to_string(enhanced_image, lang='chi_tra')
-                detected_chars = re.findall(r'[\u4e00-\u9fa5]', raw_text)
-                detected_chars = list(dict.fromkeys(detected_chars)) # 去重
-    except Exception as e:
-        st.warning(f"⚠️ 裁剪工具載入中或發生小錯誤，您可以直接使用下方快捷選單或手動輸入。")
+            # 將畫布座標還原對應到原圖的高解像度座標
+            scale_x = orig_w / display_w
+            scale_y = orig_h / display_h
+            
+            orig_left = int(box_left * scale_x)
+            orig_top = int(box_top * scale_y)
+            orig_right = int((box_left + box_width) * scale_x)
+            orig_bottom = int((box_top + box_height) * scale_y)
+            
+            # 限制邊界在圖片範圍內
+            orig_left = max(0, orig_left)
+            orig_top = max(0, orig_top)
+            orig_right = min(orig_w, orig_right)
+            orig_bottom = min(orig_h, orig_bottom)
+            
+            if orig_right > orig_left and orig_bottom > orig_top:
+                cropped_img = image.crop((orig_left, orig_top, orig_right, orig_bottom))
+                st.image(cropped_img, caption="🎯 已精準框選的目標區域", use_container_width=True)
+
+# 進行 OCR 辨識
+target_image = cropped_img if cropped_img is not None else image
+
+if target_image is not None:
+    with st.spinner("🔍 正在辨識文字中..."):
+        try:
+            gray_image = ImageOps.grayscale(target_image)
+            enhancer = ImageEnhance.Contrast(gray_image)
+            enhanced_image = enhancer.enhance(2.5)
+            
+            raw_text = pytesseract.image_to_string(enhanced_image, lang='chi_tra')
+            detected_chars = re.findall(r'[\u4e00-\u9fa5]', raw_text)
+            detected_chars = list(dict.fromkeys(detected_chars))
+        except Exception as e:
+            pass
 
 # 結合辨識出的字與快捷選單
 final_chars = detected_chars if detected_chars else []
@@ -68,7 +122,7 @@ if selected_quick != "請選擇..." and selected_quick not in final_chars:
     final_chars.insert(0, selected_quick)
 
 if final_chars:
-    st.success(f"✅ 成功鎖定字元：{' '.join(final_chars)}")
+    st.success(f"✅ 可選字元：{' '.join(final_chars)}")
     selected_char = st.selectbox("請選擇需要教學的字 (Select Character):", final_chars)
 else:
     if uploaded_file is not None:
