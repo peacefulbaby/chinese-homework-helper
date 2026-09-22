@@ -3,14 +3,13 @@ from PIL import Image, ImageOps, ImageEnhance
 import pytesseract
 import re
 import fitz  # PyMuPDF 處理 PDF
-from streamlit_cropper import st_cropper
 
 st.set_page_config(page_title="中文寫字小幫手", page_icon="✍️", layout="centered")
 
 st.title("🇭🇰 寫字功課好幫手")
-st.markdown("> **Helper Instructions:** Upload an image or PDF, crop the target character to avoid noise, and get the stroke order.")
+st.markdown("> **Helper Instructions:** Upload an image or PDF. The app will automatically optimize and recognize the characters.")
 
-# 1. 快捷選擇常見生字（雙重保險）
+# 1. 常用生字快捷選單（確保隨時都能直接點選，100% 穩定）
 common_chars = ["學", "校", "我", "們", "老", "師", "早", "安", "爸", "媽", "家", "人", "功", "課", "中", "文"]
 selected_quick = st.selectbox("📌 快捷選擇生字 (Quick Select):", ["請選擇..."] + common_chars)
 
@@ -21,43 +20,40 @@ image = None
 
 if uploaded_file is not None:
     file_type = uploaded_file.type
-    if "pdf" in file_type:
-        # 如果上傳的是 PDF，自動轉為圖片
-        with st.spinner("📄 正在讀取 PDF 檔案..."):
-            doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-            if len(doc) > 0:
-                page = doc[0]  # 預設讀取第一頁
-                pix = page.get_pixmap(dpi=200)  # 高解像度轉換
-                image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                st.success(f"✅ 成功載入 PDF（共 {len(doc)} 頁，現顯示第 1 頁）")
-    else:
-        image = Image.open(uploaded_file)
+    try:
+        if "pdf" in file_type:
+            with st.spinner("📄 正在讀取 PDF 檔案..."):
+                doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+                if len(doc) > 0:
+                    page = doc[0]
+                    pix = page.get_pixmap(dpi=200) # 高解像度轉圖
+                    image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    st.success(f"✅ 成功載入 PDF（共 {len(doc)} 頁，現顯示第 1 頁）")
+        else:
+            image = Image.open(uploaded_file)
+    except Exception as e:
+        st.error(f"檔案讀取發生錯誤：{e}")
 
 detected_chars = []
 
 if image is not None:
-    st.markdown("### ✂️ 裁剪需要識別的文字區域 (Crop Target Character)")
-    st.markdown("請在下方圖片調整框選範圍，**只框出要學的那一個字**，避免認錯隔離文字：")
+    st.image(image, caption="已上傳的功課檔案", use_container_width=True)
     
-    # 互動式裁剪工具
-    cropped_img = st_cropper(image, real_time=True, box_color='#FF4B4B', aspect_ratio=None, key="cropper")
-    
-    if cropped_img:
-        st.image(cropped_img, caption="已裁剪的目標區域", use_container_width=True)
-        
-        with st.spinner("🔍 正在辨識裁剪區內的文字..."):
-            try:
-                # 影像預處理：轉灰階 + 提高對比度
-                gray_image = ImageOps.grayscale(cropped_img)
-                enhancer = ImageEnhance.Contrast(gray_image)
-                enhanced_image = enhancer.enhance(2.5)
-                
-                # 執行 Tesseract 繁體中文辨識
-                raw_text = pytesseract.image_to_string(enhanced_image, lang='chi_tra')
-                detected_chars = re.findall(r'[\u4e00-\u9fa5]', raw_text)
-                detected_chars = list(dict.fromkeys(detected_chars)) # 去重
-            except Exception as e:
-                st.error(f"辨識發生錯誤：{e}")
+    with st.spinner("🔍 正在進行影像優化與文字辨識..."):
+        try:
+            # 確保圖片為 RGB 格式
+            image = image.convert("RGB")
+            # 影像預處理：轉灰階 + 提高對比度（大幅提升辨識率）
+            gray_image = ImageOps.grayscale(image)
+            enhancer = ImageEnhance.Contrast(gray_image)
+            enhanced_image = enhancer.enhance(2.5)
+            
+            # 執行 Tesseract 繁體中文辨識
+            raw_text = pytesseract.image_to_string(enhanced_image, lang='chi_tra')
+            detected_chars = re.findall(r'[\u4e00-\u9fa5]', raw_text)
+            detected_chars = list(dict.fromkeys(detected_chars)) # 去重
+        except Exception as e:
+            st.error(f"辨識發生錯誤：{e}")
 
 # 結合辨識出的字與快捷選單
 final_chars = detected_chars if detected_chars else []
@@ -65,11 +61,11 @@ if selected_quick != "請選擇..." and selected_quick not in final_chars:
     final_chars.insert(0, selected_quick)
 
 if final_chars:
-    st.success(f"✅ 成功鎖定字元：{' '.join(final_chars)}")
+    st.success(f"✅ 系統辨識/可選字元：{' '.join(final_chars)}")
     selected_char = st.selectbox("請選擇需要教學的字 (Select Character):", final_chars)
 else:
     if uploaded_file is not None:
-        st.warning("⚠️ 尚未裁剪或未能自動辨識，您可以直接手動輸入：")
+        st.info("💡 如果未自動認出，請直接在下方手動輸入要查的字：")
     manual_input = st.text_input("手動輸入要查詢的字：")
     selected_char = manual_input if manual_input else None
 
