@@ -2,4 +2,5 @@ streamlit
 pillow
 pytesseract
 PyMuPDF
-streamlit-cropper
+streamlit-drawable-canvas
+numpy
