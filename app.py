@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image, ImageOps, ImageEnhance
 import pytesseract
 import re
@@ -9,7 +10,7 @@ import numpy as np
 st.set_page_config(page_title="中文寫字小幫手", page_icon="✍️", layout="centered")
 
 st.title("🇭🇰 寫字功課好幫手")
-st.markdown("> **Helper Instructions:** Upload an image or PDF, then **draw a red box** around the target character on the canvas below.")
+st.markdown("> **Helper Instructions:** Upload/draw a box to select a character, and the stroke animation and pronunciation will appear directly below.")
 
 # 1. 常用生字快捷選單（雙重保險）
 common_chars = ["學", "校", "我", "們", "老", "師", "早", "安", "爸", "媽", "家", "人", "功", "課", "中", "文"]
@@ -44,9 +45,7 @@ if image is not None:
     orig_w, orig_h = image.size
     
     st.markdown("### ✍️ 請在下方圖片用手指畫框框住要學的字")
-    st.markdown("*(Draw a rectangle box around the character)*")
     
-    # 為了適應手機/iPad 畫面，將顯示寬度設定為 400 像素
     display_w = 400
     if orig_w > display_w:
         ratio = display_w / orig_w
@@ -57,7 +56,6 @@ if image is not None:
         display_h = orig_h
         img_for_canvas = image
         
-    # 建立互動畫布
     canvas_result = st_canvas(
         fill_color="rgba(255, 165, 0, 0.2)",
         stroke_width=2,
@@ -70,18 +68,15 @@ if image is not None:
         key="canvas",
     )
     
-    # 如果外傭在畫布上畫了方框
     if canvas_result.json_data is not None:
         objects = canvas_result.json_data.get("objects", [])
         if len(objects) > 0:
-            # 取得最後一個畫的方框座標
             obj = objects[-1]
             box_left = obj["left"]
             box_top = obj["top"]
             box_width = obj["width"]
             box_height = obj["height"]
             
-            # 將畫布座標還原對應到原圖的高解像度座標
             scale_x = orig_w / display_w
             scale_y = orig_h / display_h
             
@@ -90,7 +85,6 @@ if image is not None:
             orig_right = int((box_left + box_width) * scale_x)
             orig_bottom = int((box_top + box_height) * scale_y)
             
-            # 限制邊界在圖片範圍內
             orig_left = max(0, orig_left)
             orig_top = max(0, orig_top)
             orig_right = min(orig_w, orig_right)
@@ -100,7 +94,6 @@ if image is not None:
                 cropped_img = image.crop((orig_left, orig_top, orig_right, orig_bottom))
                 st.image(cropped_img, caption="🎯 已精準框選的目標區域", use_container_width=True)
 
-# 進行 OCR 辨識
 target_image = cropped_img if cropped_img is not None else image
 
 if target_image is not None:
@@ -116,7 +109,6 @@ if target_image is not None:
         except Exception as e:
             pass
 
-# 結合辨識出的字與快捷選單
 final_chars = detected_chars if detected_chars else []
 if selected_quick != "請選擇..." and selected_quick not in final_chars:
     final_chars.insert(0, selected_quick)
@@ -130,23 +122,64 @@ else:
     manual_input = st.text_input("手動輸入要查詢的字：")
     selected_char = manual_input if manual_input else None
 
-# 3. 顯示教學與筆順區塊
+# 3. 直接在同一個版面顯示「動態筆順動畫」與「發音按鈕」
 if selected_char:
     st.divider()
-    st.subheader(f"📖 生字詳解：【 {selected_char} 】")
+    st.subheader(f"📖 生字教學：【 {selected_char} 】")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**香港小學習字表規範**")
-        st.write("• 標準筆順與結構")
-        st.markdown("[🔗 查閱《香港小學習字表》](https://www.edbchinese.hk/lexlist_ch/)")
+    # 利用 HTML + JavaScript 嵌入筆順動畫與語音合成
+    stroke_html = f"""
+    <div style="text-align: center; font-family: sans-serif; background: #ffffff; padding: 15px; border-radius: 12px; border: 1px solid #e0e0e0; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+        <p style="color: #666; font-size: 14px; margin-bottom: 8px;"><b>Stroke Order Animation / 筆順動畫</b></p>
         
-    with col2:
-        st.markdown("**外傭指導提示 (Helper Guide)**")
-        st.write("🗣️ 請依照香港標準發音教導小朋友。")
+        <!-- 筆順畫布 -->
+        <div id="character-target" style="width: 160px; height: 160px; margin: 0 auto; background: #fafafa; border: 2px dashed #ccc; border-radius: 10px;"></div>
         
+        <div style="margin-top: 12px;">
+            <button onclick="writer.animateCharacter()" style="padding: 8px 14px; background: #FF4B4B; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px;">▶️ 播放筆順</button>
+            <button onclick="writer.loopCharacterSequence()" style="padding: 8px 14px; background: #4B79FF; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; margin-left: 6px;">🔁 循環播放</button>
+        </div>
+        
+        <p style="color: #666; font-size: 14px; margin-top: 20px; margin-bottom: 8px;"><b>Pronunciation / 語音朗讀</b></p>
+        <div>
+            <button onclick="speakWord('{selected_char}', 'zh-HK')" style="padding: 8px 14px; background: #2e7d32; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px;">🔊 廣東話發音</button>
+            <button onclick="speakWord('{selected_char}', 'zh-CN')" style="padding: 8px 14px; background: #1565c0; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; margin-left: 6px;">🔊 普通話發音</button>
+        </div>
+    </div>
+
+    <!-- 載入開源筆順繪製庫 Hanzi Writer -->
+    <script src="https://cdn.jsdelivr.net/npm/hanzi-writer@3.5/dist/hanzi-writer.min.js"></script>
+    <script>
+        var writer = HanziWriter.create('character-target', '{selected_char}', {{
+            width: 160,
+            height: 160,
+            padding: 8,
+            showOutline: true,
+            strokeAnimationSpeed: 1,
+            delayBetweenStrokes: 400,
+            strokeColor: '#222222',
+            radicalColor: '#168F16'
+        }});
+        
+        function speakWord(text, lang) {{
+            if ('speechSynthesis' in window) {{
+                window.speechSynthesis.cancel(); // 停止先前的發音
+                var utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = lang;
+                utterance.rate = 0.8; // 稍微放慢速度，方便小朋友跟讀
+                window.speechSynthesis.speak(utterance);
+            }} else {{
+                alert('抱歉，此瀏覽器不支援語音朗讀功能。');
+            }}
+        }}
+    </script>
+    """
+    
+    # 渲染至 Streamlit 畫面中
+    components.html(stroke_html, height=350)
+    
     st.markdown("""
     > 💡 **Helper Tip for Child:**
-    > 1. Look at the correct stroke order.
-    > 2. Write slowly, one stroke at a time.
+    > 1. Click **"播放筆順"** to watch how the character is written stroke by stroke.
+    > 2. Click **"廣東話發音"** to listen to the correct Cantonese pronunciation and guide the child to read along.
     """)
